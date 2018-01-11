@@ -4,16 +4,16 @@ import string
 import bson
 
 from errors.base import UserNotFound, FailedUpdatingUser, OccupationNotFound
-from models.users import User, Occupation, UnavailabilitySlot
+from models.users import Occupation, TimeSlot, Therapist
 
 
 def register_occupation(name):
-    occupation = Occupation(occupation_name=name)
-    return occupation.save()
+    occupation_obj = Occupation(name=name)
+    return occupation_obj.save()
 
 
 def get_occupation_by_name(occupation_name):
-    occupation_obj = Occupation.objects(occupation_name=occupation_name).first()
+    occupation_obj = Occupation.objects(name=occupation_name).first()
     if occupation_obj:
         return occupation_obj
     pass
@@ -54,8 +54,8 @@ def add_therapist_to_occupation(occupation_obj, therapist_obj):
     return False
 
 
-def validate_user_login(username, password):
-    user = User.objects(username=username).first()
+def validate_user_login(cls, username, password):
+    user = cls.objects(username=username).first()
     if not user:
         raise UserNotFound
     if user.password == password:
@@ -74,26 +74,27 @@ def update_users_token(user_obj):
     return token
 
 
-def register_user(username, password, role):
-    user = User(username=username, password=password, role=role)
-    return user.save()
+def register_user(cls, username, password, occupation):
+    if occupation:
+        return cls(username=username, password=password, occupation=occupation).save()
+    return cls(username=username, password=password).save()
 
 
-def get_users_list_from_ids(list_of_ids):
-    string_list = [str(elem) for elem in list_of_ids]
-    users = User.objects.filter(id__in=string_list)
-    return users._result_cache
+def generate_restriction(user_obj, start_time, end_time, description):
+    slot = TimeSlot(start_time=start_time, end_time=end_time, description=description, available=False)
+    for unavailability in user_obj.unavailability:
+        if unavailability.overlap(slot):
+            unavailability.start_time = min([unavailability.start_time, slot.start_time])
+            unavailability.end_time = max([unavailability.end_time, slot.end_time])
+            unavailability.description = "{}, {}".format(unavailability.description, slot.description)
+            return unavailability.save()
+
+    user_obj.__class__.objects(id=user_obj.id).update_one(push__unavailability=slot)
+    return True
 
 
-def generate_restriction(user_obj, start_time, end_time, reason):
-    slot = UnavailabilitySlot(start_time=start_time, end_time=end_time, reason=reason)
-    valid = True
-    for schedules_slot in user_obj.unavailability:
-        if schedules_slot.overlap(slot):
-            valid = False
-
-    if valid:
-        User.objects(id=user_obj.id).update_one(push__unavailability=slot)
-        return True
-
-    return False
+def get_therapists_by_occupation(occupation_id):
+    id_obj = bson.ObjectId(occupation_id)
+    occupation = Occupation.objects.get(id=id_obj)
+    therapists = Therapist.objects(occupation=occupation)
+    return therapists
